@@ -1,9 +1,9 @@
 # execmgr
 
-`execmgr` is a small execution manager for local apps / scripts.
-Think of it as a **very lightweight process manager** for things you don’t want to daemonize properly yet.
+`execmgr` is a small execution manager for local apps and scripts. 
+Think of it as a **very lightweight process manager** for things you don’t want to daemonize properly yet, but want to keep track of.
 
-No magic. No background services. Just folders, scripts, and metadata.
+No magic. No background services. Just folders, scripts, and a lockfile.
 
 ---
 
@@ -11,10 +11,10 @@ No magic. No background services. Just folders, scripts, and metadata.
 
 I wanted something that:
 
-* can start / stop local scripts
-* remembers what I ran last
-* keeps logs per app
-* doesn’t require systemd, Docker, or rewriting everything
+* can start / stop local scripts without thinking about PIDs
+* remembers what I ran last and how many times
+* keeps logs per app automatically
+* doesn’t require systemd, Docker, or writing a service file every time
 * is predictable and hackable
 
 So this exists.
@@ -26,7 +26,7 @@ So this exists.
 <details>
   <summary>Click to view</summary>
   
-This is the fastest way to see `execmgr` actually do something useful.
+This is the fastest way to see `execmgr` actually do something.
 
 ### 1. Build and install
 
@@ -35,37 +35,23 @@ cargo build --release
 cp target/release/execmgr ~/.local/bin/
 ```
 
-Make sure it’s in your `PATH`:
-
-```bash
-which execmgr
-```
-
----
-
 ### 2. Create a sample app
 
 ```bash
 execmgr create demo
 ```
 
-This creates a directory like:
-
-```
-~/.local/state/execmgr/demo/
-```
-
----
+This creates a directory at `~/.local/state/execmgr/demo/`.
 
 ### 3. Edit the start script
 
 Open the generated start script:
 
 ```bash
-$EDITOR ~/.local/state/execmgr/demo/start_<hash>.sh
+$EDITOR ~/.local/state/execmgr/demo/start.sh
 ```
 
-Put something simple in it, for example:
+Put a simple loop in it:
 
 ```sh
 #!/bin/sh
@@ -75,17 +61,13 @@ while true; do
 done
 ```
 
----
-
 ### 4. Run the app
 
 ```bash
 execmgr run demo
 ```
 
-The app now runs in the background.
-
----
+The app now runs in the background. `execmgr` uses a file lock to make sure you don't accidentally start it twice.
 
 ### 5. Check status
 
@@ -93,298 +75,113 @@ The app now runs in the background.
 execmgr status demo
 ```
 
-You should see:
-
-* whether it’s running
-* pid
-* last run time
-* log paths
-
----
-
 ### 6. View logs
-
-```bash
-execmgr log demo
-```
-
-Or follow them live:
 
 ```bash
 execmgr log demo -f
 ```
 
----
-
 ### 7. Stop it
 
-force kill it:
-
-```bash
-execmgr kill demo
-```
-
-stop will not work because stop.sh file is empty
-
+To use the `stop.sh` script (write *exit logic* in the `stop.sh`):
 ```bash
 execmgr stop demo
 ```
 
----
-
-### 8. Clean up
-
+To just nuke the process via PID:
 ```bash
-execmgr rm demo
+execmgr kill demo
 ```
-
-That’s it.
-If this worked, you understand 90% of `execmgr`.
-
----
-
-### Notes for quick-start users
-
-* Logs are **reset on every run**
-* Everything lives in one directory per app
-* You can inspect or edit files manually at any time
-* If something breaks, you can always just `rm -rf` the app directory
-
-Nothing is hidden.
 
 </details>
 
 ---
 
-## How it works (high level)
+## How it works
 
 Each app is just a directory with a few files:
 
 ```
 execmgr/
 └── myapp/
-    ├── app.json          # metadata (created time, runs, last pid)
-    ├── start_<hash>.sh   # start script
-    ├── stop.sh           # stop script (optional but recommended)
+    ├── app.json      # metadata (created time, run count, last pid)
+    ├── app.lock      # used by flock to check running
+    ├── start.sh      # main entrypoint
+    ├── stop.sh       # cleanup script
     └── logs/
         ├── stdout.log
         └── stderr.log
 ```
 
-`execmgr` doesn’t care *what* your app is.
-If it can be started by a shell script, it works.
+When you `run` an app, `execmgr` wraps your `start.sh` in a bash subshell that manages a file lock. If the lock is held, the app is "running." If the process dies, the lock is released automatically by the OS.
 
 ---
 
-## Base directory (important)
+## Storage
 
 State is stored using XDG conventions:
 
-Resolution order:
-
-1. `EXECMGR_HOME` (explicit override)
+1. `EXECMGR_HOME` (override)
 2. `$XDG_STATE_HOME/execmgr`
 3. `$HOME/.local/state/execmgr`
-4. `.execmgr` (last fallback)
-
-You can check or override it like this:
-
-```bash
-export EXECMGR_HOME=/tmp/execmgr-test
-```
-
----
-
-## Installation
-
-For now, build it yourself:
-
-```bash
-cargo build --release
-```
-
-Put the binary somewhere in your `PATH`, for example:
-
-```bash
-cp target/release/execmgr ~/.local/bin/
-```
+4. `.execmgr` (fallback)
 
 ---
 
 ## Usage
 
-### Create an app
-
+### Create
 ```bash
-execmgr create myapp
+execmgr create <name>
+```
+Creates the folder and boilerplate `start.sh`/`stop.sh`.
+
+### List & Process Status
+```bash
+execmgr ls       # list all apps
+execmgr ls -l    # detailed list
+execmgr ps       # list all running apps
+execmgr ps -l    # detailed ps
 ```
 
-This creates the folder and scripts.
-Edit the start script:
-
-```bash
-$EDITOR ~/.local/state/execmgr/myapp/start_<hash>.sh
-```
-
----
-
-### Run an app
-
-```bash
-execmgr run myapp
-```
-
-* runs the start script detached
-* updates metadata
-* logs go to `execmgr/myapp/logs/stdout.log` and `execmgr/myapp/logs/stderr.log`
-
----
-
-### Stop an app via stop script
-
-```bash
-execmgr stop myapp
-```
-
-execute `stop.sh`.
-
-### Kill an app
-
-```bash
-execmgr kill myapp
-```
-
-execmgr falls back to killing the stored PID.
-
----
-
-### List apps
-
-```bash
-execmgr list
-execmgr ls
-execmgr ls -l
-```
-
-Shows all apps.
-
----
-
-### List running apps
-
-```bash
-execmgr ps
-execmgr ps -l
-```
-
-Shows only apps that look like they are currently running.
-
----
-
-### Check app status
-
-```bash
-execmgr status myapp
-# name        : myapp
-# path        : $HOME/.local/state/execmgr/myapp
-# created     : 2026-01-13 14:36:42
-# runs        : 3
-# last run    : 2026-01-13 15:20:58
-# last pid    : 355995
-# running     : no
-# logs        : $HOME/.local/state/execmgr/myapp/logs
-#   stdout    : $HOME/.local/state/execmgr/myapp/logs/stdout.log
-#   stderr    : $HOME/.local/state/execmgr/myapp/logs/stderr.log
-```
-
-Shows app status
-
----
-
-### Check info
-
-```bash
-execmgr info
-execmgr about
-# execmgr info
-# -------------
-# base dir    : $HOME/.local/state/execmgr
-# apps        : 3
-# running     : 0
-# binary      : $HOME/local-development/execmgr/bin/execmgr
-# rust        : execmgr
-# version     : 0.1.0
-```
-
----
+### Management
+*   **run / start**: Runs the `start.sh` detached. Logs are **truncated (reset)** on every run.
+*   **stop**: Runs the `stop.sh` script. Use this if your app needs a graceful shutdown (like `podman-compose down`).
+*   **kill**: Sends a `kill -9` to the last known PID. Use this when your script is stuck.
+*   **status**: Full metadata dump for a specific app.
 
 ### Logs
-
-Show stdout logs (default):
-
 ```bash
-execmgr log myapp
+execmgr log <name>             # view stdout
+execmgr log <name> --stderr    # view stderr
+execmgr log <name> -f          # stdout: tail -f
+execmgr log <name> -f --stderr # stderr: tail -f
+execmgr log <name> -c          # clear logs
+execmgr log <name> -c --stderr # clear only stderr log
+execmgr log <name> -c --stdout # clear only stdout log
 ```
 
-Show stderr logs:
-
+### Maintenance
 ```bash
-execmgr log myapp --stderr
+execmgr info          # see total apps, running count, and binary paths
+execmgr rm <name>     # delete the app folder (refuses if running)
+execmgr rm -f <name>  # delete the app folder and skip confirmation (refuses if running)
 ```
-
-Follow logs:
-
-```bash
-execmgr log myapp -f
-execmgr log myapp -f --stderr
-```
-
-Clear logs:
-
-```bash
-execmgr log myapp -c            # clear both
-execmgr log myapp -c --stdout   # clear stdout only
-execmgr log myapp -c --stderr   # clear stderr only
-```
-
-Logs are **reset on every run**, not appended.
 
 ---
 
-### Delete an app
+## Technical Notes
 
-```bash
-execmgr delete myapp
-execmgr rm myapp
-execmgr rm myapp -f
-```
-
-Refuses to delete if the app is running.
-
----
-
-## What this is NOT
-
-* Not a full daemon manager
-* Not production-grade 😥
-
-This is for **local development**, **personal services**, and **things you want control over**.
-
-If you need reliability guarantees, use `systemd`.
-If you need simpler solution, use `execmgr`
-
----
-
-## Notes
-
-* Process detection is best-effort (`ps`-based).
-* No restart policies (yet).
-* Logs are per-app, last-run only.
-* Everything is intentionally simple and inspectable.
+*   **Locking**: Uses `flock` via a wrapper. This is much more reliable than checking if a PID exists, as PIDs get reused by the OS.
+*   **Environment**: `start.sh` and `stop.sh` are executed in their respective app directory.
+*   **No Restart Policy**: If your script crashes, it stays dead. This isn't `systemd`. It's a basic manager.
+*   **Logs**: `execmgr` redirects stdout/stderr to files. It does **not** rotate logs; they are wiped every time you `run` the app.
 
 ---
 
 ## License
 
-Do whatever you want with it.
+MIT. 
+
+Do whatever you want with it. 
 If it breaks, you get to keep both pieces.

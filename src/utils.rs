@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local};
 use fs2::FileExt;
 use std::{
     fs::{OpenOptions, create_dir_all},
@@ -16,6 +17,18 @@ pub fn log_paths(app_dir: &PathBuf) -> Result<LogPath, String> {
         stdout: log_dir.join("stdout.log"),
         stderr: log_dir.join("stderr.log"),
     })
+}
+
+pub fn since_running(started_at: &str) -> Option<i64> {
+    let start: DateTime<Local> = match started_at.parse() {
+        Ok(t) => t,
+        Err(_) => return None,
+    };
+
+    let now = Local::now();
+    let dur = now - start;
+
+    Some(dur.num_seconds())
 }
 
 /// Returns true if the app lock is currently held by another process

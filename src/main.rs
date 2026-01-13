@@ -8,13 +8,14 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use chrono::Utc;
+use chrono::Local;
 use clap::Parser;
 
 use crate::app::{App, LastRunInfo};
 use crate::cli::Commands;
 use crate::utils::{
-    attach_log, check_running, kill_pid, log_paths, resolve_base_dir, run_attached, spawn_detached,
+    attach_log, check_running, kill_pid, log_paths, resolve_base_dir, run_attached, since_running,
+    spawn_detached,
 };
 
 fn create_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
@@ -51,7 +52,7 @@ fn create_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
     }
     let app = App {
         name: name.to_string(),
-        created_at: Utc::now().to_rfc3339(),
+        created_at: Local::now().to_rfc3339(),
         last_run: None,
         num_runs: 0,
     };
@@ -101,7 +102,7 @@ fn run_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
 
     let child = spawn_detached(&script, &path)?;
     let last_run = LastRunInfo {
-        time: Utc::now().to_rfc3339(),
+        time: Local::now().to_rfc3339(),
         pid: child,
     };
     println!("started '{}'", name);
@@ -168,6 +169,21 @@ fn status_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
     }
 
     println!("running     : {}", if running { "yes" } else { "no" });
+    println!(
+        "uptime      : {}",
+        if running {
+            app.last_run
+                .as_ref()
+                .map(|l| {
+                    since_running(&l.time)
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".into())
+                })
+                .unwrap_or_else(|| "-".into())
+        } else {
+            "-".into()
+        }
+    );
 
     let log_dir = path.join("logs");
     if log_dir.exists() {
@@ -384,14 +400,14 @@ fn list_app(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String> {
 fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String> {
     if long {
         println!(
-            "{:<20} {:<20} {:<25} {:<6} {:<8}",
-            "NAME", "PATH", "CREATED", "RUNS", "PID"
+            "{:<20} {:<20} {:<25} {:<6} {:<8} {:<25}",
+            "NAME", "PATH", "CREATED", "RUNS", "PID", "UPTIME"
         );
     }
     if !basedir.exists() {
         return Ok(());
     }
-
+    let now = Local::now();
     for entry in read_dir(basedir).map_err(|_| "unable to read dir")? {
         let entry = entry.map_err(|_| "error while reading entry")?;
         let entry_type = entry
@@ -408,7 +424,7 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
             .expect("bug: unknown encoding")
             .to_owned();
         let path = entry.path();
-        if !check_running(&path){
+        if !check_running(&path) {
             continue;
         }
         if long {
@@ -420,7 +436,7 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
             .map_err(|_| format!("data is corrupted in {:?}", json_path))?;
             if full {
                 println!(
-                    "{:<20} {:<20} {:<25} {:<6} {:<8}",
+                    "{:<20} {:<20} {:<25} {:<6} {:<8} {:<25}",
                     name,
                     path.display(),
                     app.created_at
@@ -431,11 +447,19 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
                     app.last_run
                         .as_ref()
                         .map(|l| l.pid.to_string())
+                        .unwrap_or_else(|| "-".into()),
+                    app.last_run
+                        .as_ref()
+                        .map(|l| {
+                            since_running(&l.time)
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "-".into())
+                        })
                         .unwrap_or_else(|| "-".into()),
                 );
             } else {
                 println!(
-                    "{:<20.20} {:<20.20} {:<25.25} {:<6} {:<8}",
+                    "{:<20.20} {:<20.20} {:<25.25} {:<6} {:<8} {:<25.25}",
                     name,
                     path.display(),
                     app.created_at
@@ -447,6 +471,14 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
                         .as_ref()
                         .map(|l| l.pid.to_string())
                         .unwrap_or_else(|| "-".into()),
+                    app.last_run
+                        .as_ref()
+                        .map(|l| {
+                            since_running(&l.time)
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "-".into())
+                        })
+                        .unwrap_or_else(|| "-".into())
                 );
             }
         } else {
