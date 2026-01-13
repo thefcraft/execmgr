@@ -42,7 +42,13 @@ pub enum Commands {
     Status { name: String },
 
     /// Stop an app using stop.sh
-    Stop { name: String },
+    Stop { 
+        name: String,
+
+        /// force run stop.sh
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
 
     /// Kill an app using pid
     Kill { name: String },

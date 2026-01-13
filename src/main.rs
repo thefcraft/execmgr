@@ -139,7 +139,7 @@ fn status_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
     )
     .map_err(|e| format!("data is corrupted in {:?}: {}", json_path, e))?;
 
-    let running = utils::check_running(&format!("start_{}.sh", name_hash));
+    let running = check_running(&format!("start_{}.sh", name_hash));
 
     println!("name        : {}", app.name);
     println!("path        : {}", path.display());
@@ -227,7 +227,7 @@ fn show_info(basedir: &PathBuf) -> Result<(), String> {
 
     Ok(())
 }
-fn stop_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
+fn stop_app(basedir: &PathBuf, name: &str, force: bool) -> Result<(), String> {
     let name_hash = sha256_hex(name);
     let path = basedir.join(name);
     if !path.exists() {
@@ -238,7 +238,7 @@ fn stop_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
         return Err(format!("'{:?}'  not found for '{}'.", script, name));
     }
 
-    if !check_running(&format!("start_{}.sh", name_hash)) {
+    if !force && !check_running(&format!("start_{}.sh", name_hash)) {
         return Err(format!("app '{}' is not running", name));
     }
 
@@ -341,7 +341,9 @@ fn list_app(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String> {
             )
             .map_err(|_| format!("data is corrupted in {:?}", json_path))?;
 
-            let is_running = running.iter().any(|line| line.contains(&name));
+            let is_running = running
+                .iter()
+                .any(|line| line.contains(&format!("start_{}.sh", sha256_hex(&name))));
             if full {
                 println!(
                     "{:<20} {:<20} {:<25} {:<6} {:<8} {:<25} {}",
@@ -422,7 +424,10 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
             .to_str()
             .expect("bug: unknown encoding")
             .to_owned();
-        if !running.iter().any(|line| line.contains(&name)) {
+        if !running
+            .iter()
+            .any(|line| line.contains(&format!("start_{}.sh", sha256_hex(&name))))
+        {
             continue;
         }
         if long {
@@ -499,7 +504,7 @@ fn show_logs(basedir: &PathBuf, name: &str, stderr: bool, follow: bool) -> Resul
         return Err(format!("app '{}' not exists.", name));
     }
 
-    let logs: utils::LogPath = log_paths(&path)?;
+    let logs = log_paths(&path)?;
     let log_file = if stderr { logs.stderr } else { logs.stdout };
     if !log_file.exists() {
         return Err("no logs found (app may not have been run yet)".into());
@@ -530,7 +535,7 @@ fn main() {
         Commands::Create { name } => create_app(&basedir, &name),
         Commands::Status { name } => status_app(&basedir, &name),
         Commands::Run { name } => run_app(&basedir, &name),
-        Commands::Stop { name } => stop_app(&basedir, &name),
+        Commands::Stop { name, force } => stop_app(&basedir, &name, force),
         Commands::Kill { name } => kill_app(&basedir, &name),
         Commands::List { long, full } => list_app(&basedir, long, full),
         Commands::Ps { long, full } => list_process(&basedir, long, full),
