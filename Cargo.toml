@@ -1,0 +1,27 @@
+[package]
+name = "execmgr"
+version = "0.1.0"
+edition = "2024"
+
+description = "A lightweight execution manager for local apps and scripts"
+readme = "README.md"
+
+license = "MIT"
+authors = ["Laksh Kumar <sisodiyalaksh@gmail.com>"]
+repository = "https://github.com/thefcraft/execmgr"
+homepage = "https://github.com/thefcraft/execmgr"
+
+keywords = ["cli", "process", "manager", "scripts", "local"]
+categories = ["command-line-utilities"]
+
+exclude = [
+    "bin/",
+    "target/"
+]
+
+[dependencies]
+chrono = "0.4.42"
+clap = { version = "4.5.54", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
