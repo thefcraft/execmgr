@@ -36,6 +36,7 @@ pub enum Commands {
         full: bool,
     },
     /// Run an app
+    #[command(alias = "start")]
     Run { name: String },
 
     /// View Status of an app

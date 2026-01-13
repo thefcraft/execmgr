@@ -14,18 +14,16 @@ use clap::Parser;
 use crate::app::{App, LastRunInfo};
 use crate::cli::Commands;
 use crate::utils::{
-    check_running, get_running_stdout, kill_pid, log_paths, resolve_base_dir, run_attached,
-    sha256_hex, spawn_detached,
+    attach_log, check_running, kill_pid, log_paths, resolve_base_dir, run_attached, spawn_detached,
 };
 
 fn create_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
-    let name_hash = sha256_hex(name);
     let path = basedir.join(name);
     if path.exists() {
         return Err(format!("app '{}' already exists.", name));
     }
     create_dir_all(&path).map_err(|_| format!("failed to create path: {:?}", path))?;
-    let files = [format!("start_{}.sh", name_hash), "stop.sh".into()];
+    let files = ["start.sh", "stop.sh"];
     for file in files {
         let filepath = path.join(file);
         let mut f = OpenOptions::new()
@@ -33,7 +31,12 @@ fn create_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
             .create_new(true)
             .open(&filepath)
             .map_err(|_| format!("failed to create file: {:?}", filepath))?;
-        writeln!(f, "#!/bin/sh").map_err(|_| format!("failed to create file: {:?}", filepath))?;
+        writeln!(
+            f,
+            "#!/bin/sh\nset -e\nexec echo 'hello from {}'",
+            name.replace("'", "`")
+        )
+        .map_err(|_| format!("failed to create file: {:?}", filepath))?;
 
         // chmod +x (755)
         let mut perms = f
@@ -64,18 +67,17 @@ fn create_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
 
     println!("created app '{}'", name);
     println!("path: {:?}", path);
-    println!("start script: start_{}.sh", name_hash);
+    println!("start script: start.sh");
 
     Ok(())
 }
 
 fn run_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
-    let name_hash = sha256_hex(name);
     let path = basedir.join(name);
     if !path.exists() {
         return Err(format!("app '{}' not exists.", name));
     }
-    let script = path.join(format!("start_{}.sh", name_hash));
+    let script = path.join("start.sh");
     if !script.exists() {
         return Err(format!("'{:?}'  not found for '{}'.", script, name));
     }
@@ -87,7 +89,7 @@ fn run_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
     )
     .map_err(|_| format!("data is corrupted in {:?}", json_path))?;
 
-    if check_running(&format!("start_{}.sh", name_hash)) {
+    if check_running(&path) {
         return Err(format!(
             "app '{}' is already running (pid: {})",
             name,
@@ -125,7 +127,6 @@ fn run_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
     Ok(())
 }
 fn status_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
-    let name_hash = sha256_hex(name);
     let path = basedir.join(name);
 
     if !path.exists() {
@@ -139,7 +140,7 @@ fn status_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
     )
     .map_err(|e| format!("data is corrupted in {:?}: {}", json_path, e))?;
 
-    let running = check_running(&format!("start_{}.sh", name_hash));
+    let running = check_running(&path);
 
     println!("name        : {}", app.name);
     println!("path        : {}", path.display());
@@ -189,8 +190,6 @@ fn show_info(basedir: &PathBuf) -> Result<(), String> {
     let mut running = 0usize;
 
     if basedir.exists() {
-        let ps_output = get_running_stdout();
-
         for entry in
             std::fs::read_dir(basedir).map_err(|e| format!("unable to read base dir: {}", e))?
         {
@@ -201,12 +200,7 @@ fn show_info(basedir: &PathBuf) -> Result<(), String> {
 
             total += 1;
 
-            let name = entry.file_name().to_string_lossy().to_string();
-
-            if ps_output
-                .iter()
-                .any(|line| line.contains(&format!("start_{}.sh", sha256_hex(&name))))
-            {
+            if check_running(&entry.path()) {
                 running += 1;
             }
         }
@@ -228,7 +222,6 @@ fn show_info(basedir: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 fn stop_app(basedir: &PathBuf, name: &str, force: bool) -> Result<(), String> {
-    let name_hash = sha256_hex(name);
     let path = basedir.join(name);
     if !path.exists() {
         return Err(format!("app '{}' not exists.", name));
@@ -238,7 +231,7 @@ fn stop_app(basedir: &PathBuf, name: &str, force: bool) -> Result<(), String> {
         return Err(format!("'{:?}'  not found for '{}'.", script, name));
     }
 
-    if !force && !check_running(&format!("start_{}.sh", name_hash)) {
+    if !force && !check_running(&path) {
         return Err(format!("app '{}' is not running", name));
     }
 
@@ -248,16 +241,15 @@ fn stop_app(basedir: &PathBuf, name: &str, force: bool) -> Result<(), String> {
     if !status.success() {
         return Err(format!("stop.sh failed for app '{}'", name));
     }
-    println!("status: {}", status);
+    println!("exit: {}", status);
     Ok(())
 }
 fn kill_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
-    let name_hash = sha256_hex(name);
     let path = basedir.join(name);
     if !path.exists() {
         return Err(format!("app '{}' not exists.", name));
     }
-    if !check_running(&format!("start_{}.sh", name_hash)) {
+    if !check_running(&path) {
         return Err(format!("app '{}' is not running", name));
     }
 
@@ -289,12 +281,11 @@ fn kill_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
     Ok(())
 }
 fn delete_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
-    let name_hash = sha256_hex(name);
     let path = basedir.join(name);
     if !path.exists() {
         return Err(format!("app '{}' not exists.", name));
     }
-    if check_running(&format!("start_{}.sh", name_hash)) {
+    if check_running(&path) {
         return Err(format!("can't delete, app '{}' is running", name));
     }
     remove_dir_all(path).expect("unable to delete");
@@ -302,15 +293,12 @@ fn delete_app(basedir: &PathBuf, name: &str) -> Result<(), String> {
     Ok(())
 }
 fn list_app(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String> {
-    let running_option = if long {
+    if long {
         println!(
             "{:<20} {:<20} {:<25} {:<6} {:<8} {:<25} {}",
             "NAME", "PATH", "CREATED", "RUNS", "PID", "LAST_RUN", "RUNNING"
         );
-        Some(get_running_stdout())
-    } else {
-        None
-    };
+    }
 
     if !basedir.exists() {
         return Ok(());
@@ -326,10 +314,8 @@ fn list_app(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String> {
         }
 
         if long {
-            let running = running_option
-                .as_ref()
-                .expect("unlikely due to above if long.");
-            let json_path = entry.path().join("app.json");
+            let path = entry.path();
+            let json_path = path.join("app.json");
             let name = entry
                 .file_name()
                 .to_str()
@@ -341,14 +327,12 @@ fn list_app(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String> {
             )
             .map_err(|_| format!("data is corrupted in {:?}", json_path))?;
 
-            let is_running = running
-                .iter()
-                .any(|line| line.contains(&format!("start_{}.sh", sha256_hex(&name))));
+            let is_running = check_running(&path);
             if full {
                 println!(
                     "{:<20} {:<20} {:<25} {:<6} {:<8} {:<25} {}",
                     name,
-                    entry.path().display(),
+                    path.display(),
                     app.created_at
                         .get(..19)
                         .unwrap_or(&app.created_at)
@@ -371,7 +355,7 @@ fn list_app(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String> {
                 println!(
                     "{:<20.20} {:<20.20} {:<25.25} {:<6} {:<8} {:<25.25} {}",
                     name,
-                    entry.path().display(),
+                    path.display(),
                     app.created_at
                         .get(..19)
                         .unwrap_or(&app.created_at)
@@ -408,7 +392,6 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
         return Ok(());
     }
 
-    let running = get_running_stdout();
     for entry in read_dir(basedir).map_err(|_| "unable to read dir")? {
         let entry = entry.map_err(|_| "error while reading entry")?;
         let entry_type = entry
@@ -424,14 +407,12 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
             .to_str()
             .expect("bug: unknown encoding")
             .to_owned();
-        if !running
-            .iter()
-            .any(|line| line.contains(&format!("start_{}.sh", sha256_hex(&name))))
-        {
+        let path = entry.path();
+        if !check_running(&path){
             continue;
         }
         if long {
-            let json_path = entry.path().join("app.json");
+            let json_path = path.join("app.json");
             let app: App = serde_json::from_str(
                 &std::fs::read_to_string(&json_path)
                     .map_err(|_| format!("unable to read {:?}", json_path))?,
@@ -441,7 +422,7 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
                 println!(
                     "{:<20} {:<20} {:<25} {:<6} {:<8}",
                     name,
-                    entry.path().display(),
+                    path.display(),
                     app.created_at
                         .get(..19)
                         .unwrap_or(&app.created_at)
@@ -456,7 +437,7 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
                 println!(
                     "{:<20.20} {:<20.20} {:<25.25} {:<6} {:<8}",
                     name,
-                    entry.path().display(),
+                    path.display(),
                     app.created_at
                         .get(..19)
                         .unwrap_or(&app.created_at)
@@ -511,10 +492,8 @@ fn show_logs(basedir: &PathBuf, name: &str, stderr: bool, follow: bool) -> Resul
     }
 
     if follow {
-        std::process::Command::new("tail")
-            .args(["-f", log_file.to_str().unwrap()])
-            .status()
-            .map_err(|e| format!("failed to follow log: {}", e))?;
+        let status = attach_log(&log_file)?;
+        println!("exit: {}", status);
     } else {
         let content =
             std::fs::read_to_string(&log_file).map_err(|e| format!("failed to read log: {}", e))?;

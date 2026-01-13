@@ -1,8 +1,8 @@
-use sha2::{Digest, Sha256};
+use fs2::FileExt;
 use std::{
     fs::{OpenOptions, create_dir_all},
     path::PathBuf,
-    process,
+    process::{self, ExitStatus},
 };
 pub struct LogPath {
     pub stdout: PathBuf,
@@ -16,6 +16,27 @@ pub fn log_paths(app_dir: &PathBuf) -> Result<LogPath, String> {
         stdout: log_dir.join("stdout.log"),
         stderr: log_dir.join("stderr.log"),
     })
+}
+
+/// Returns true if the app lock is currently held by another process
+pub fn is_lock_held(app_dir: &PathBuf) -> Result<bool, String> {
+    let lock_path = app_dir.join("app.lock");
+
+    if !lock_path.exists() {
+        return Ok(false);
+    }
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| format!("failed to open lockfile {:?}: {}", lock_path, e))?;
+
+    // acquire exclusive lock
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(false),
+        Err(_) => Ok(true),
+    } // drop lock
 }
 
 pub fn spawn_detached(script: &PathBuf, app_dir: &PathBuf) -> Result<u32, String> {
@@ -35,14 +56,39 @@ pub fn spawn_detached(script: &PathBuf, app_dir: &PathBuf) -> Result<u32, String
         .open(logs.stderr)
         .map_err(|e| format!("failed to open stderr log: {}", e))?;
 
-    let child = process::Command::new(script)
+    let lockfile = app_dir.join("app.lock");
+
+    let cmd = format!(
+        r#"
+        set -e
+        exec 9>"{lock}"
+        if ! flock -n 9; then
+            echo "app already running" >&2
+            exit 1
+        fi
+        exec "{script}"
+        "#,
+        lock = lockfile.display(),
+        script = script.display(),
+    );
+
+    let child = process::Command::new("bash")
+        .arg("-c")
+        .arg(cmd)
         .stdin(process::Stdio::null())
         .stdout(process::Stdio::from(stdout))
         .stderr(process::Stdio::from(stderr))
         .spawn()
-        .map_err(|e| format!("failed to spawn: {e}"))?;
+        .map_err(|e| format!("failed to spawn bash wrapper: {}", e))?;
 
     Ok(child.id())
+}
+
+pub fn attach_log(log_file: &PathBuf) -> Result<ExitStatus, String> {
+    process::Command::new("tail")
+        .args(["-f", log_file.to_str().unwrap()])
+        .status()
+        .map_err(|e| format!("failed to follow log: {}", e))
 }
 
 pub fn run_attached(script: &PathBuf) -> Result<process::ExitStatus, String> {
@@ -66,32 +112,8 @@ pub fn kill_pid(pid: u32) -> Result<process::ExitStatus, String> {
     Ok(status)
 }
 
-pub fn sha256_hex(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let result = hasher.finalize();
-    format!("{:x}", result)
-}
-
-pub fn check_running(needle: &str) -> bool {
-    let output = process::Command::new("ps")
-        .args(["-f"])
-        .output()
-        .expect("unable to run command ps");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    stdout.lines().any(|line| line.contains(needle))
-}
-
-pub fn get_running_stdout() -> Vec<String> {
-    let output = process::Command::new("ps")
-        .args(["-f"])
-        .output()
-        .expect("unable to run command ps");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    stdout.lines().map(|line| line.to_owned()).collect()
+pub fn check_running(app_dir: &PathBuf) -> bool {
+    is_lock_held(app_dir).expect("Error:")
 }
 
 pub fn resolve_base_dir() -> PathBuf {
