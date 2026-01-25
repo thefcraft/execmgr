@@ -545,7 +545,16 @@ fn main() {
         Commands::Info => show_info(&basedir),
         Commands::Create { name } => create_app(&basedir, &name),
         Commands::Status { name } => status_app(&basedir, &name),
-        Commands::Run { name } => run_app(&basedir, &name),
+        Commands::Run { name, detached } => match run_app(&basedir, &name) {
+            Err(e) => Err(e),
+            _ => {
+                if detached {
+                    Ok(())
+                } else {
+                    show_logs(&basedir, &name, false, true)
+                }
+            }
+        },
         Commands::Stop { name, force } => stop_app(&basedir, &name, force),
         Commands::Kill { name } => kill_app(&basedir, &name),
         Commands::List { long, full } => list_app(&basedir, long, full),

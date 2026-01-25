@@ -37,7 +37,12 @@ pub enum Commands {
     },
     /// Run an app
     #[command(alias = "start")]
-    Run { name: String },
+    Run { 
+        name: String,
+        /// no logs in output
+        #[arg(short = 'd', long)]
+        detached: bool,
+    },
 
     /// View Status of an app
     Status { name: String },
