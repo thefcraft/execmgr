@@ -407,7 +407,6 @@ fn list_process(basedir: &PathBuf, long: bool, full: bool) -> Result<(), String>
     if !basedir.exists() {
         return Ok(());
     }
-    let now = Local::now();
     for entry in read_dir(basedir).map_err(|_| "unable to read dir")? {
         let entry = entry.map_err(|_| "error while reading entry")?;
         let entry_type = entry
