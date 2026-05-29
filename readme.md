@@ -5,6 +5,10 @@ Think of it as a **very lightweight process manager** for things you don’t wan
 
 No magic. No background services. Just folders, scripts, and a lockfile.
 
+![ui-home page](docs/imgs/ui.png)
+
+![ui-edit script](docs/imgs/start-script.png)
+
 ---
 
 ## Why this exists
