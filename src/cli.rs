@@ -78,16 +78,16 @@ pub enum Commands {
         #[arg(short = 'c', long)]
         clear: bool,
 
-        /// Clear stdout logs
-        #[arg(long, requires = "clear")]
+        /// Show/Clear stdout logs
+        #[arg(long)]
         stdout: bool,
 
-        /// Clear / show stderr logs
+        /// Show/Clear stderr logs
         #[arg(long)]
         stderr: bool,
 
-        /// Follow logs (like tail -f)
-        #[arg(short = 'f', long, conflicts_with = "clear")]
-        follow: bool,
+        /// Do not follow logs, just dump current logs
+        #[arg(short = 'd', long, conflicts_with = "clear")]
+        no_follow: bool,
     },
 }

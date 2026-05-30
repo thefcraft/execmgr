@@ -14,7 +14,7 @@ use clap::Parser;
 use crate::app::{App, LastRunInfo};
 use crate::cli::Commands;
 use crate::utils::{
-    attach_log, check_running, kill_pid, log_paths, resolve_base_dir, run_attached, since_running,
+    check_running, kill_pid, log_paths, resolve_base_dir, run_attached, since_running,
     spawn_detached,
 };
 
@@ -510,25 +510,178 @@ fn clear_logs(basedir: &PathBuf, name: &str, stderr: bool, stdout: bool) -> Resu
 
     Ok(())
 }
-fn show_logs(basedir: &PathBuf, name: &str, stderr: bool, follow: bool) -> Result<(), String> {
+fn show_logs(
+    basedir: &PathBuf,
+    name: &str,
+    stdout: bool,
+    stderr: bool,
+    follow: bool,
+    exit_on_stopped: bool,
+) -> Result<(), String> {
     let path = basedir.join(name);
     if !path.exists() {
         return Err(format!("app '{}' not exists.", name));
     }
 
     let logs = log_paths(&path)?;
-    let log_file = if stderr { logs.stderr } else { logs.stdout };
-    if !log_file.exists() {
+    if !logs.stdout.exists() && !logs.stderr.exists() {
         return Err("no logs found (app may not have been run yet)".into());
     }
 
-    if follow {
-        let status = attach_log(&log_file)?;
-        println!("exit: {}", status);
+    let (show_stdout, show_stderr) = if follow {
+        match (stdout, stderr) {
+            (false, false) => (true, true),
+            (s_out, s_err) => (s_out, s_err),
+        }
     } else {
-        let content =
-            std::fs::read_to_string(&log_file).map_err(|e| format!("failed to read log: {}", e))?;
-        print!("{}", content);
+        match (stdout, stderr) {
+            (false, false) => (true, false),
+            (s_out, s_err) => (s_out, s_err),
+        }
+    };
+
+    if follow {
+        use std::fs::File;
+        use std::io::{Read, Seek, SeekFrom};
+        use std::thread;
+        use std::time::Duration;
+
+        struct Follower {
+            file: File,
+            buffer: Vec<u8>,
+            prefix: &'static str,
+            show_prefix: bool,
+        }
+
+        impl Follower {
+            fn new(path: &PathBuf, prefix: &'static str, show_prefix: bool) -> Result<Self, std::io::Error> {
+                let mut file = File::open(path)?;
+                let content = std::fs::read_to_string(path).unwrap_or_default();
+                let lines: Vec<&str> = content.lines().collect();
+                let start_idx = lines.len().saturating_sub(10);
+                for line in &lines[start_idx..] {
+                    if show_prefix {
+                        println!("{} {}", prefix, line);
+                    } else {
+                        println!("{}", line);
+                    }
+                }
+                file.seek(SeekFrom::End(0))?;
+                Ok(Follower {
+                    file,
+                    buffer: Vec::new(),
+                    prefix,
+                    show_prefix,
+                })
+            }
+
+            fn read_new_lines(&mut self) -> Result<bool, std::io::Error> {
+                let mut temp_buf = [0u8; 4096];
+                let bytes_read = self.file.read(&mut temp_buf)?;
+                if bytes_read == 0 {
+                    return Ok(false);
+                }
+
+                self.buffer.extend_from_slice(&temp_buf[..bytes_read]);
+                let mut start = 0;
+                for i in 0..self.buffer.len() {
+                    if self.buffer[i] == b'\n' {
+                        let line_bytes = &self.buffer[start..i];
+                        let line = String::from_utf8_lossy(line_bytes);
+                        if self.show_prefix {
+                            println!("{} {}", self.prefix, line);
+                        } else {
+                            println!("{}", line);
+                        }
+                        start = i + 1;
+                    }
+                }
+                if start > 0 {
+                    self.buffer.drain(0..start);
+                }
+                Ok(true)
+            }
+        }
+
+        let mut followers = Vec::new();
+        let show_prefix = show_stdout && show_stderr;
+
+        if show_stdout && logs.stdout.exists() {
+            followers.push(Follower::new(&logs.stdout, "[stdout]", show_prefix)
+                .map_err(|e| format!("failed to follow stdout: {}", e))?);
+        }
+        if show_stderr && logs.stderr.exists() {
+            followers.push(Follower::new(&logs.stderr, "[stderr]", show_prefix)
+                .map_err(|e| format!("failed to follow stderr: {}", e))?);
+        }
+
+        if followers.is_empty() {
+            return Err("no log files could be opened".into());
+        }
+
+        let mut has_seen_running = false;
+        let mut startup_checks = 10;
+
+        loop {
+            let mut read_anything = false;
+            for follower in &mut followers {
+                match follower.read_new_lines() {
+                    Ok(true) => {
+                        read_anything = true;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        return Err(format!("error reading logs: {}", e));
+                    }
+                }
+            }
+            if !read_anything {
+                if exit_on_stopped {
+                    let is_running = check_running(&path);
+                    if is_running {
+                        has_seen_running = true;
+                    } else if has_seen_running {
+                        break;
+                    } else if startup_checks > 0 {
+                        startup_checks -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                thread::sleep(Duration::from_millis(100));
+            } else if exit_on_stopped {
+                has_seen_running = true;
+            }
+        }
+    } else {
+        if show_stdout && show_stderr {
+            if logs.stdout.exists() {
+                let content = std::fs::read_to_string(&logs.stdout)
+                    .map_err(|e| format!("failed to read stdout log: {}", e))?;
+                for line in content.lines() {
+                    println!("[stdout] {}", line);
+                }
+            }
+            if logs.stderr.exists() {
+                let content = std::fs::read_to_string(&logs.stderr)
+                    .map_err(|e| format!("failed to read stderr log: {}", e))?;
+                for line in content.lines() {
+                    println!("[stderr] {}", line);
+                }
+            }
+        } else if show_stdout {
+            if logs.stdout.exists() {
+                let content = std::fs::read_to_string(&logs.stdout)
+                    .map_err(|e| format!("failed to read stdout log: {}", e))?;
+                print!("{}", content);
+            }
+        } else if show_stderr {
+            if logs.stderr.exists() {
+                let content = std::fs::read_to_string(&logs.stderr)
+                    .map_err(|e| format!("failed to read stderr log: {}", e))?;
+                print!("{}", content);
+            }
+        }
     }
     Ok(())
 }
@@ -550,7 +703,7 @@ fn main() {
                 if detached {
                     Ok(())
                 } else {
-                    show_logs(&basedir, &name, false, true)
+                    show_logs(&basedir, &name, true, true, true, true)
                 }
             }
         },
@@ -563,7 +716,7 @@ fn main() {
             clear,
             stderr,
             stdout,
-            follow,
+            no_follow,
         } => {
             if clear {
                 if !stderr && !stdout {
@@ -572,7 +725,7 @@ fn main() {
                     clear_logs(&basedir, &name, stderr, stdout)
                 }
             } else {
-                show_logs(&basedir, &name, stderr, follow)
+                show_logs(&basedir, &name, stdout, stderr, !no_follow, false)
             }
         }
         Commands::Delete { name, force } => {

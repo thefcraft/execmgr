@@ -3,7 +3,7 @@ use fs2::FileExt;
 use std::{
     fs::{OpenOptions, create_dir_all},
     path::PathBuf,
-    process::{self, ExitStatus},
+    process::{self},
 };
 pub struct LogPath {
     pub stdout: PathBuf,
@@ -97,12 +97,6 @@ pub fn spawn_detached(script: &PathBuf, app_dir: &PathBuf) -> Result<u32, String
     Ok(child.id())
 }
 
-pub fn attach_log(log_file: &PathBuf) -> Result<ExitStatus, String> {
-    process::Command::new("tail")
-        .args(["-f", log_file.to_str().unwrap()])
-        .status()
-        .map_err(|e| format!("failed to follow log: {}", e))
-}
 
 pub fn run_attached(script: &PathBuf) -> Result<process::ExitStatus, String> {
     let status = process::Command::new(script)
